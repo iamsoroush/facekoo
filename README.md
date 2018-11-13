@@ -1,2 +1,3 @@
-# face_recognition
-A Simple example of implementing a face recognition model via Python and TensorFlow
+# Face Clustering
+
+Using [facenet](https://github.com/davidsandberg/facenet) for face representations, this package performs face clustering on faces found from videos or images.
