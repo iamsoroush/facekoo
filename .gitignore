@@ -1,2 +1,4 @@
 /facekoo/models
 /facekoo/dataset
+/facekoo/classifier.pkl
+/facekoo/embeddings.pkl
