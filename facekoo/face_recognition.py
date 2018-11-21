@@ -32,7 +32,6 @@ import cv2
 import logging
 import re
 import imgaug.augmenters as iaa
-import outlierdetection
 
 
 class FaceRecognizer:
@@ -135,6 +134,10 @@ class FaceRecognizer:
         with open(self.classifier_filename_exp, 'wb') as outfile:
             pickle.dump(new_classifier, outfile)
             self.classifier__ = new_classifier
+
+    @property
+    def classifier(self):
+        return self.classifier_[0]
 
     def _load_embeddings(self):
         """Loads early generated embeddings.
@@ -690,13 +693,13 @@ class FaceRecognizer:
         ret[:, :, 0] = ret[:, :, 1] = ret[:, :, 2] = img
         return ret
 
-    @staticmethod
-    def detect_outliers(embeddings, method='hillout'):
-        outlier_detector = outlierdetection.HilOutOD(n_neighbors=int(len(embeddings)/2),
-                                                     outlier_constant=1.5, algorithm='brute',
-                                                     distance_metric='cosine')
-        labels = outlier_detector.fit_predict(embeddings)
-        return labels
+    # @staticmethod
+    # def detect_outliers(embeddings, method='hillout'):
+    #     outlier_detector = outlierdetection.HilOutOD(n_neighbors=int(len(embeddings)/2),
+    #                                                  outlier_constant=1.5, algorithm='brute',
+    #                                                  distance_metric='cosine')
+    #     labels = outlier_detector.fit_predict(embeddings)
+    #     return labels
 
 
 if __name__ == '__main__':
