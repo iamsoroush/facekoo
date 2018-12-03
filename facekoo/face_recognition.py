@@ -18,6 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+
 import tensorflow as tf
 import numpy as np
 import os
@@ -51,7 +52,7 @@ class FaceRecognizer:
         batch_size: Size of batch to pass to tensorflow session.run for feature generation
         image_size: Facenet model will use images at this size if do_crop=True, all training and
                      testing images will be transformed to this size before feature generation.
-                    Give aligned images in 182*182 size to the model and set this parameter to 160
+                    Pass aligned images in 182*182 size to the model and set this parameter to 160
                      for good performance.
         embeddings_filename: Name of previously saved embeddings, or file name for
                               saving incoming new embeddings.
@@ -94,23 +95,24 @@ class FaceRecognizer:
         self.logger_.setLevel(logging.INFO)
         self.logger_.addHandler(console_handler)
         self.random_seed = random_seed
-        self.model_dir = model_dir
+        self.model_dir = os.path.join(os.path.dirname(__file__), model_dir)
         self.sess_ = self._load_model()
         self.batch_size = batch_size
         self.image_size = image_size
         self.embeddings_filename = embeddings_filename
+        self.embeddings_file_path_ = os.path.join(os.path.dirname(__file__), embeddings_filename)
         self.embeddings_ = self._load_embeddings()
-        self.classifier_filename_exp = os.path.expanduser(classifier_filename)
+        self.classifier_filename_exp = os.path.join(os.path.dirname(__file__), classifier_filename)
         self.classifier_ = self._load_classifier()
-        self.train_dir = train_dir
+        self.train_dir = os.path.join(os.path.dirname(__file__), train_dir)
         self.do_prewhiten = do_prewhiten
         self.do_crop = do_crop
         self.min_augmented_images_per_class = min_augmented_images_per_class
 
     def __enter__(self):
-        """Returns model when object enters a "with" block"""
+        """Returns self when object enters a "with" block"""
 
-        return self.model
+        return self
 
     def __exit__(self, ctx_type, ctx_value, ctx_traceback):
         self.sess_.close()
@@ -121,7 +123,7 @@ class FaceRecognizer:
 
     @embeddings_.setter
     def embeddings_(self, new_dict):
-        with open(self.embeddings_filename, 'wb') as file:
+        with open(self.embeddings_file_path_, 'wb') as file:
             pickle.dump(new_dict, file)
             self.embeddings__ = new_dict
 
@@ -143,11 +145,11 @@ class FaceRecognizer:
         """Loads early generated embeddings.
 
         Returns:
-            "None" if self.embeddings_filename path does not exist,
+            "None" if self.embeddings_file_path path does not exist,
             retuens saved embeddings else
         """
-        if os.path.exists(self.embeddings_filename):
-            with open(self.embeddings_filename, 'rb') as file:
+        if os.path.exists(self.embeddings_file_path_):
+            with open(self.embeddings_file_path_, 'rb') as file:
                 embeddings = pickle.load(file)
             self.logger_.info('Embeddings file loaded.')
         else:
@@ -185,16 +187,16 @@ class FaceRecognizer:
                 in specified path.
         """
 
-        model_exp = os.path.expanduser(self.model_dir)
+        self.model_dir
         try:
-            meta_file, ckpt_file = self._get_model_filenames(model_exp)
+            meta_file, ckpt_file = self._get_model_filenames(self.model_dir)
         except Exception as e:
             self.logger_.error(e)
             raise e
 
         sess = tf.Session()
-        saver = tf.train.import_meta_graph(os.path.join(model_exp, meta_file), input_map=None)
-        saver.restore(sess, os.path.join(model_exp, ckpt_file))
+        saver = tf.train.import_meta_graph(os.path.join(self.model_dir, meta_file), input_map=None)
+        saver.restore(sess, os.path.join(self.model_dir, ckpt_file))
         self.logger_.info("Model loaded. Session is ready.")
         return sess
 
@@ -241,29 +243,52 @@ class FaceRecognizer:
          on unaugmented data.
         """
 
-        self.logger_.info('Starting to train ...')
+        self.logger_.info('Loading dataset from {} ...'.format(self.train_dir))
         dataset = self._get_dataset()
-        for cls in dataset:  # Check that there are at least five training image per class
-            assert len(cls.image_paths) > 5, 'There must be at least ten image for each class in the dataset'
-        paths, labels = self._get_image_paths_and_labels(dataset)
-        class_names = [cls.name.replace('_', ' ') for cls in dataset]  # Create a list of class names
-        lbls = [class_names[lbl] for lbl in labels]  # Contains the names of labels
-        self.logger_.info('Number of training classes: %d' % len(dataset))
+        paths, labels, class_names = self._load_dataset()
+        self.logger_.info('Number of training classes: %d' % len(class_names))
         self.logger_.info('Number of training images: %d' % len(paths))
-        self.logger_.info('Training classifier ...')
-        augmented_embs, augmented_labels = self._generate_augmented_embeddings(paths, labels)
-        model = SVC(kernel='linear', probability=True)  # Train classifier
-        model.fit(augmented_embs, augmented_labels)
-        self.logger_.info('Classifier score: {}'.format(model.score(augmented_embs, augmented_labels)))
-        self.classifier = (model, class_names)
 
-        # Testing classifier on training data
-        self.logger_.info('Testing classifier on training data ...')
-        emb_array = self._generate_embeddings_from_paths(paths=paths)  # Calculate embeddings for train data
+        # # for cls in dataset:  # Check that there are at least five training image per class
+        # #     assert len(cls.image_paths) > 5, 'There must be at least ten image for each class in the dataset'
+        #
+        # paths, labels = self._get_image_paths_and_labels(dataset)
+        # class_names = [cls.name.replace('_', ' ') for cls in dataset]  # Create a list of class names
+
+        self.logger_.info('Generating augmented embeddings for training data ...')
+        augmented_embs, augmented_labels = self._generate_augmented_embeddings(paths, labels)
+
+        self.logger_.info('Training linear Support Vector Classifier ...')
+        model = SVC(kernel='linear', probability=True)
+        model.fit(augmented_embs, augmented_labels)
+
+        self.logger_.info('Classifier score on augmented train data: {}'.format(model.score(augmented_embs, augmented_labels)))
+
+        train_embs  = self._generate_embeddings_from_paths(paths)
+        self.logger_.info('Classifier score on train data: {}'.format(model.score(train_embs, labels)))
+
+        self.logger_.info('Saving trained classifier ...')
+        self.classifier_ = (model, class_names)
+
+        self.logger_.info('Saving calculated embeddings for train dataset ...')
         embedding_dict = {p: list() for p in class_names}
-        for ind, embedding in enumerate(emb_array):
-            embedding_dict[lbls[ind]].append(embedding)
-        self.embeddings = embedding_dict
+        for ind, embedding in enumerate(train_embs):
+            class_name = class_names[labels[ind]]
+            embedding_dict[class_name].append(embedding)
+        self.embeddings_ = embedding_dict
+
+        self.logger_.info('Training done.')
+        return
+
+    def evaluate(self, eval_dir):
+
+        self.logger_.info('Loading data from {} ...'.format(eval_dir))
+        paths, labels, class_names = self._load_dataset(path=eval_dir)
+        lbls = [class_names[lbl] for lbl in labels]  # Contains the names of labels
+
+        self.logger_.info('Evaluating classifier on given data :')
+        emb_array = self._generate_embeddings_from_paths(paths=paths)
+        model = self.classifier
         predictions = model.predict_proba(emb_array)
         best_class_indices = np.argmax(predictions, axis=1)
         best_class_probabilities = predictions[np.arange(len(best_class_indices)), best_class_indices]
@@ -274,12 +299,25 @@ class FaceRecognizer:
         self.logger_.info('Accuracy: %.3f' % accuracy)
         self.logger_.info('Verification score: %.3f +- %.3f' % (best_class_probabilities.mean(),
                                                                 best_class_probabilities.std()))
-        return
+        return accuracy
 
-    def _get_dataset(self):
+    def _load_dataset(self, path=None):
+        """Returns paths of all images, and corresponding labels, and unique class names"""
+
+        if path is None:
+            path = self.train_dir
+
+        dataset = self._get_dataset(path=path)
+        paths, labels = self._get_image_paths_and_labels(dataset)
+        class_names = [cls.name.replace('_', ' ') for cls in dataset]
+        return paths, labels, class_names
+
+    def _get_dataset(self, path=None):
         """Returns list of ImageClass objects, each object belongs to one class."""
 
-        path = self.train_dir
+        if path is None:
+            path = self.train_dir
+
         dataset = []
         path_exp = os.path.expanduser(path)
         classes = [path for path in os.listdir(path_exp) if os.path.isdir(os.path.join(path_exp, path))]
@@ -318,7 +356,7 @@ class FaceRecognizer:
 
     @staticmethod
     def _get_image_paths_and_labels(dataset):
-        """Returns paths and labels of all images in training dataset.
+        """Returns paths and labels of all images in given dataset.
 
         Args:
             dataset: list of ImageClass objects.
@@ -425,7 +463,7 @@ class FaceRecognizer:
         """Generates embeddings for images found on given paths.
 
         Args:
-            paths: [[c1_path1, c1_path2, ...], [c2_path1, c2_path2, ...], ...]
+            paths: [path1, path2, ...]
 
         Returns:
             generated embeddings
@@ -514,12 +552,12 @@ class FaceRecognizer:
             (predicted class name, associated probability) else
         """
 
-        if self.classifier is None:
+        if self.classifier_ is None:
             self.logger_.warning('Classifier not found.')
             return False, False
         if is_bgr:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        model, class_names = self.classifier
+        model, class_names = self.classifier_
         embedding = self._generate_embedding_from_image(img)
         prediction = model.predict_proba(embedding[np.newaxis, :])[0]
         best_class_index = np.argmax(prediction)
@@ -527,7 +565,7 @@ class FaceRecognizer:
         class_prob = prediction[best_class_index]
         return class_name, class_prob
 
-    def plot_2d_embeddings(self, technique='tsne'):
+    def plot_2d_embeddings(self, technique='tsne', embs=None):
         """Plots embeddings after dimension reduction.
 
         For explatory tasks only.
@@ -536,47 +574,61 @@ class FaceRecognizer:
             technique: 'tsne' or 'pca'
         """
 
-        if not self.embeddings:
-            print('Embedding dictionary pickle not found.')
-            return
-        embeddings = list()
-        labels = list()
-        for key, value in self.embeddings.items():
-            for embedding in value:
-                embeddings.append(embedding)
-                labels.append(key)
-        labels_set = list(set(labels))
-        if technique == 'tsne':
-            transformed = TSNE(n_components=2).fit_transform(embeddings)
-        elif technique == 'pca':
-            transformed = PCA(n_components=2).fit_transform(embeddings)
-        principal_df = pd.DataFrame(data=transformed,
-                                    columns=['principal component 1',
-                                             'principal component 2'])
-        final_df = pd.concat([principal_df, pd.DataFrame({'label': labels})],
-                             axis=1)
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(1, 1, 1)
-        ax.set_xlabel('Principal Component 1', fontsize=15)
-        ax.set_ylabel('Principal Component 2', fontsize=15)
-        ax.set_title('2 component PCA', fontsize=20)
-        tableau20 = [(31, 119, 180), (174, 199, 232), (255, 127, 14),
-                     (255, 187, 120), (44, 160, 44), (152, 223, 138),
-                     (214, 39, 40), (255, 152, 150), (148, 103, 189),
-                     (197, 176, 213), (140, 86, 75), (196, 156, 148),
-                     (227, 119, 194), (247, 182, 210), (127, 127, 127),
-                     (199, 199, 199), (188, 189, 34), (219, 219, 141),
-                     (23, 190, 207), (158, 218, 229)]
-        colors = [(i[0] / 255., i[1] / 255., i[2] / 255.)
-                  for i in tableau20][: len(labels_set)]
-        for label, color in zip(labels_set, colors):
-            indices_to_keep = final_df['label'] == label
-            ax.scatter(final_df.loc[indices_to_keep, 'principal component 1'],
-                       final_df.loc[indices_to_keep, 'principal component 2'],
-                       color=color, label=label)
-        ax.legend(labels_set)
-        ax.grid()
-        plt.show()
+        if embs is None:
+            if not self.embeddings_:
+                print('Embedding dictionary pickle not found.')
+                return
+            embeddings = list()
+            labels = list()
+            for key, value in self.embeddings_.items():
+                for embedding in value:
+                    embeddings.append(embedding)
+                    labels.append(key)
+            labels_set = list(set(labels))
+            if technique == 'tsne':
+                transformed = TSNE(n_components=2).fit_transform(embeddings)
+            elif technique == 'pca':
+                transformed = PCA(n_components=2).fit_transform(embeddings)
+            principal_df = pd.DataFrame(data=transformed,
+                                        columns=['principal component 1',
+                                                 'principal component 2'])
+            final_df = pd.concat([principal_df, pd.DataFrame({'label': labels})],
+                                 axis=1)
+            fig = plt.figure(figsize=(8, 8))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.set_xlabel('Principal Component 1', fontsize=15)
+            ax.set_ylabel('Principal Component 2', fontsize=15)
+            ax.set_title('2 component PCA', fontsize=20)
+            tableau20 = [(31, 119, 180), (174, 199, 232), (255, 127, 14),
+                         (255, 187, 120), (44, 160, 44), (152, 223, 138),
+                         (214, 39, 40), (255, 152, 150), (148, 103, 189),
+                         (197, 176, 213), (140, 86, 75), (196, 156, 148),
+                         (227, 119, 194), (247, 182, 210), (127, 127, 127),
+                         (199, 199, 199), (188, 189, 34), (219, 219, 141),
+                         (23, 190, 207), (158, 218, 229)]
+            colors = [(i[0] / 255., i[1] / 255., i[2] / 255.)
+                      for i in tableau20][: len(labels_set)]
+            for label, color in zip(labels_set, colors):
+                indices_to_keep = final_df['label'] == label
+                ax.scatter(final_df.loc[indices_to_keep, 'principal component 1'],
+                           final_df.loc[indices_to_keep, 'principal component 2'],
+                           color=color, label=label)
+            ax.legend(labels_set)
+            ax.grid()
+            plt.show()
+        else:
+            embeddings = embs
+            if technique == 'tsne':
+                transformed = TSNE(n_components=2).fit_transform(embeddings)
+            elif technique == 'pca':
+                transformed = PCA(n_components=2).fit_transform(embeddings)
+
+            fig = plt.figure(figsize=(8, 8))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.set_title('Embs on reduced dimensions by ' + technique, fontsize=20)
+            ax.scatter(transformed[:, 0], transformed[:, 1])
+            ax.grid()
+            plt.show()
         return
 
     def clean(self):
@@ -592,7 +644,7 @@ class FaceRecognizer:
         """Loads images in RGB format, and preprocesses the loaded images.
 
         Args:
-            image_paths: [[c1_path1, c1_path2, ...], [c2_path1, c2_path2, ...], ...]
+            image_paths: [path1, path2, ...]
 
         Returns:
             loades images
@@ -601,7 +653,11 @@ class FaceRecognizer:
         nrof_samples = len(image_paths)
         images = np.zeros((nrof_samples, self.image_size, self.image_size, 3))
         for i in range(nrof_samples):
-            img = cv2.imread(image_paths[i])
+            image_path = os.path.expanduser(image_paths[i])
+            img = cv2.imread(image_path)
+            if not np.any(img):
+                print('image not found.')
+                continue
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img = self._preprocess_image(image=img)
             images[i, :, :, :] = img
@@ -612,7 +668,6 @@ class FaceRecognizer:
 
         Args:
             image: must be of format grayscale or RGB
-            image_size: desired image size for feeding to model
 
         Returns:
             preprocessed image
@@ -650,7 +705,7 @@ class FaceRecognizer:
     def _prewhiten(x):
         """Input image standardization.
 
-        This makes predictions much accurate than when train and test on non-whitened images.
+        This makes predictions much accurate than using non-whitened images.
 
         Args:
             x: input image
@@ -704,6 +759,7 @@ class FaceRecognizer:
 
 if __name__ == '__main__':
     fr = FaceRecognizer(do_prewhiten=True, do_crop=True)
-    fr.train()
+    # fr.train()
+    fr.evaluate('dataset/train')
     fr.plot_2d_embeddings(technique='tsne')
     fr.clean()
