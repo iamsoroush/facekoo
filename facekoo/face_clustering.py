@@ -21,7 +21,7 @@ import logging
 
 import tensorflow as tf
 import numpy as np
-import skimage
+import skimage.io as skio
 
 
 class FaceClusering:
@@ -152,7 +152,9 @@ class FaceNet:
         self.logger_ = self._initialize_logger()
         self.model_dir_ = os.path.join(os.path.dirname(__file__) + '/models/', model_name)
         self.logger_.info('Model dir: '.format(self.model_dir_))
-        self.sess_ = self._load_model()
+        self.sess_, self.graph_ = self._load_model()
+        self.closed_ = False
+        self.images_placeholder_, self.embeddings_tensor_, self.phase_train_placeholder_ = self._get_tensors()
         self.batch_size = batch_size
         self.image_size = image_size
         self.do_prewhiten = do_prewhiten
@@ -190,7 +192,16 @@ class FaceNet:
         saver = tf.train.import_meta_graph(os.path.join(self.model_dir_, meta_file), input_map=None)
         saver.restore(sess, os.path.join(self.model_dir_, ckpt_file))
         self.logger_.info("Model loaded. Session is ready.")
-        return sess
+        return sess, sess.graph
+
+    def _get_tensors(self):
+        """Returns needed tensors: placeholders and embeddings tensor."""
+
+        images_placeholder = self.graph_.get_tensor_by_name("input:0")
+        embeddings = self.graph_.get_tensor_by_name("embeddings:0")
+        phase_train_placeholder = self.graph_.get_tensor_by_name("phase_train:0")
+
+        return images_placeholder, embeddings, phase_train_placeholder
 
     @staticmethod
     def _get_model_filenames(model_dir):
@@ -242,35 +253,6 @@ class FaceNet:
 
         return emb_array
 
-    def _generate_embeddings(self, images):
-        """Generates embeddings for given images.
-
-        Args:
-            images: preprocessed images.
-
-        Returns:
-            generated embeddings.
-        """
-
-        images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
-        embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
-        phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
-        embedding_size = embeddings.get_shape()[1]
-
-        # Run forward pass to calculate embeddings
-        nrof_images = images.shape[0]
-        nrof_batches_per_epoch = int(np.ceil(1.0 * nrof_images / self.batch_size))
-        emb_array = np.zeros((nrof_images, embedding_size))
-
-        for i in range(nrof_batches_per_epoch):
-            start_index = i * self.batch_size
-            end_index = min((i + 1) * self.batch_size, nrof_images)
-            imgs = images[start_index: end_index]
-            feed_dict = {images_placeholder: imgs, phase_train_placeholder: False}
-            emb_array[start_index: end_index, :] = self.sess_.run(embeddings, feed_dict=feed_dict)
-
-        return emb_array
-
     def generate_embeddings_from_paths(self, image_paths):
         """Generate embeddings for images found in specified paths.
 
@@ -281,25 +263,66 @@ class FaceNet:
             generated 512-dimensional embeddings for images found on paths.
         """
 
-        # np.random.seed(seed=self.random_seed)
-        images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
-        embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
-        phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
-        embedding_size = embeddings.get_shape()[1]
+        embedding_size = self.embeddings_tensor_.get_shape()[1]
 
         # Run forward pass to calculate embeddings
         self.logger_.info('Calculating embeddings ...')
         nrof_images = len(image_paths)
         nrof_batches_per_epoch = int(np.ceil(1.0 * nrof_images / self.batch_size))
         emb_array = np.zeros((nrof_images, embedding_size))
+
         for i in range(nrof_batches_per_epoch):
             start_index = i * self.batch_size
             end_index = min((i + 1) * self.batch_size, nrof_images)
             paths_batch = image_paths[start_index: end_index]
             images = self._load_data_from_paths(paths_batch)
-            feed_dict = {images_placeholder: images, phase_train_placeholder: False}
-            emb_array[start_index: end_index, :] = self.sess_.run(embeddings, feed_dict=feed_dict)
+            emb_array[start_index: end_index, :] = self._generate_batch_embeddings(images)
+
         return emb_array
+
+    def clean(self):
+        """Closes background tensorflow session."""
+
+        self.sess_.close()
+        self.closed_ = True
+
+    def _generate_embeddings(self, images):
+        """Generates embeddings for given images.
+
+        Args:
+            images: preprocessed images.
+
+        Returns:
+            generated embeddings.
+        """
+
+        embedding_size = self.embeddings_tensor_.get_shape()[1]
+
+        # Run forward pass to calculate embeddings
+        nrof_images = images.shape[0]
+        nrof_batches_per_epoch = int(np.ceil(1.0 * nrof_images / self.batch_size))
+        emb_array = np.zeros((nrof_images, embedding_size))
+
+        for i in range(nrof_batches_per_epoch):
+            start_index = i * self.batch_size
+            end_index = min((i + 1) * self.batch_size, nrof_images)
+            imgs = images[start_index: end_index]
+            emb_array[start_index: end_index, :] = self._generate_batch_embeddings(imgs)
+
+        return emb_array
+
+    def _generate_batch_embeddings(self, batch):
+        """One run over a batch, that generates embeddings for given batch.
+
+        Args:
+            batch: array of preprocessed images.
+
+        Returns:
+            generated embeddings
+        """
+
+        feed_dict = {self.images_placeholder_: batch, self.phase_train_placeholder_: False}
+        return self.sess_.run(self.embeddings_tensor_, feed_dict=feed_dict)
 
     def _load_data_from_paths(self, image_paths):
         """Loads images in RGB, and returns preprocessed images.
@@ -317,23 +340,22 @@ class FaceNet:
 
         for i in range(nrof_samples):
             image_path = os.path.expanduser(image_paths[i])
-            img = cv2.imread(image_path)
-
+            img = skio.imread(image_path)
             if not np.any(img):
                 print('image not found.')
                 continue
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img = self._preprocess_image(image=img)
             images[i, :, :, :] = img
         return images
 
-    def clean(self):
-        """Closes background tensorflow session."""
-
-        pass
-
     def _preprocess_images(self, images):
         """Preprocesses array of images.
+
+        Note: Pass aligned faces of size (182, 182) to this method
+
+
+         if self.image_size is (160, 160)
+         for performance maintaining.
 
         Args:
             images: array of RGB images.
@@ -351,6 +373,9 @@ class FaceNet:
 
     def _preprocess_image(self, image):
         """Preprocess image for feeding to model.
+
+        Note: Pass aligned face of size (182, 182) to this method if self.image_size is (160, 160)
+         for performance maintaining.
 
         Args:
             image: RGB image to preprocess.
@@ -395,3 +420,7 @@ class FaceNet:
             image = image[(sz1 - sz2 + v):(sz1 + sz2 + v),
                           (sz1 - sz2 + h):(sz1 + sz2 + h), :]
         return image
+
+
+class FaceAligner:
+    pass
