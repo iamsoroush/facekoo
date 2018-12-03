@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Randk-Order-Based clustering algorithm.
 
-I combine Approximate Rank-Order algorithm and Chinese Whispers algorithm
+I combine Approximate-Rank-Order algorithm and Chinese-Whispers algorithm
  in ROCWClustering class.
 """
 # Author: Soroush Moazed <soroush.moazed@gmail.com>
