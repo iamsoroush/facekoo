@@ -22,6 +22,8 @@ import logging
 import tensorflow as tf
 import numpy as np
 import skimage.io as skio
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
 
 
 class FaceClusering:
@@ -126,6 +128,8 @@ class FaceNet:
         generate_embeddings_from_images: given images, generates 512-dimensional embeddings.
         generate_embeddings_from_paths: generates embeddings for images found at
             specified paths.
+        plot_2d_embeddings: plots generated embeddings for generated embeddings in 2D space,
+            after performing dimension reduction using 'TSNE' method.
         clean: closes the running tensorflow Session.
 
     Attributes:
@@ -151,7 +155,7 @@ class FaceNet:
 
         self.logger_ = self._initialize_logger()
         self.model_dir_ = os.path.join(os.path.dirname(__file__) + '/models/', model_name)
-        self.logger_.info('Model dir: '.format(self.model_dir_))
+        self.logger_.info('Model dir: {}'.format(self.model_dir_))
         self.sess_, self.graph_ = self._load_model()
         self.closed_ = False
         self.images_placeholder_, self.embeddings_tensor_, self.phase_train_placeholder_ = self._get_tensors()
@@ -279,6 +283,44 @@ class FaceNet:
             emb_array[start_index: end_index, :] = self._generate_batch_embeddings(images)
 
         return emb_array
+
+    def plot_2d_embeddings(self, embs, labels):
+        """Plots embeddings after dimension reduction.
+
+        For explatory tasks only.
+
+        Args:
+            embs: generated embeddings for faces.
+            labels: labels for given embeddings.
+        """
+
+        transformed = TSNE(n_components=2).fit_transform(embs)
+        labels_set = np.unique(labels)
+
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(1, 1, 1)
+        ax.set_xlabel('Transformed dim 1', fontsize=15)
+        ax.set_ylabel('Transformed dim 2', fontsize=15)
+        ax.set_title('2D TSNE', fontsize=20)
+        tableau20 = [(31, 119, 180), (174, 199, 232), (255, 127, 14),
+                     (255, 187, 120), (44, 160, 44), (152, 223, 138),
+                     (214, 39, 40), (255, 152, 150), (148, 103, 189),
+                     (197, 176, 213), (140, 86, 75), (196, 156, 148),
+                     (227, 119, 194), (247, 182, 210), (127, 127, 127),
+                     (199, 199, 199), (188, 189, 34), (219, 219, 141),
+                     (23, 190, 207), (158, 218, 229)]
+        colors = [(i[0] / 255., i[1] / 255., i[2] / 255.)
+                  for i in tableau20][: len(labels_set)]
+
+        for label, color in zip(labels_set, colors):
+            indices_to_keep = np.where(labels == label)[0]
+            samples = transformed[indices_to_keep]
+            ax.scatter(samples[:, 0], samples[:, 1], color=color, label=label)
+
+        ax.legend(labels_set)
+        ax.grid()
+        plt.show()
+        return
 
     def clean(self):
         """Closes background tensorflow session."""
