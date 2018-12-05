@@ -2,3 +2,4 @@
 /facekoo/dataset
 /facekoo/classifier.pkl
 /facekoo/embeddings.pkl
+/facekoo/__pycache__
