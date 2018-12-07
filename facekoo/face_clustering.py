@@ -5,13 +5,14 @@
    It uses facenet's pretrained CNN for feature extraction, and uses predefined
     clustering algorithms for performing clustering on images or video files.
 
-   Instantiate an object from this class, tune the model on your own data if needed,
-    and enjoy clustered faces.
+   Instantiate an object from this class, tune the model on your own data if
+    needed, and enjoy clustered faces.
 
 
-   You can use the model in context manager mode, but the session will terminate
-    at the end of the 'with' block. When using in standard way, the background
-    tensorflow session wouldn't terminate in order to avoid redundant operations.
+   You can use the model in context manager mode, but the session will
+    terminate at the end of the 'with' block. When using in standard way,
+    the background tensorflow session wouldn't terminate in order to avoid
+    redundant operations.
 """
 # Author: Soroush Moazed <soroush.moazed@gmail.com>
 
@@ -22,8 +23,12 @@ import logging
 import tensorflow as tf
 import numpy as np
 import skimage.io as skio
+import skimage.color as skcolor
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+import dlib
+from collections import OrderedDict
+import cv2
 
 
 class FaceClusering:
@@ -35,7 +40,8 @@ class FaceClusering:
         """Clustering on given samples.
 
         Args:
-            X: an array of arrays, each row is a sample and columns are features.
+            X: an array of arrays, each row is a sample and columns are
+             features.
 
         Returns:
             an array that contains predicted labels for given X.
@@ -116,16 +122,18 @@ class FaceClusering:
 
 
 class FaceNet:
-    """FaceNet class containing the facenet model ready to generate embeddings for faces.
+    """FaceNet class containing the facenet model ready to generate embeddings
+    for faces.
 
     Naming rules:
-        self.name : externally given parameters (as argument), and public parameters
+        self.name : externally given parameters (as argument), and public
+         parameters
         self.name_ : internally created, non-public parameters
         self.name() : public methods
         self._name() : internal methods
 
     Public methods:
-        generate_embeddings_from_images: given images, generates 512-dimensional embeddings.
+        generate_embeddings_from_images: given images, generates 512D embeddings.
         generate_embeddings_from_paths: generates embeddings for images found at
             specified paths.
         plot_2d_embeddings: plots generated embeddings for generated embeddings in 2D space,
@@ -145,8 +153,8 @@ class FaceNet:
             batch_size: size of batch to pass to tensorflow's session.run() for feature generation.
             image_size: facenet model will use images at this size if do_crop=True, all training and
                          testing images will be transformed to this size before feature generation.
-                        pass aligned faces in 182*182 size to the model and set this parameter to 160
-                         for good performance.
+                        pass aligned faces in 182*182 size to the model and set this parameter to
+                         160 for good performance.
             do_prewhiten: Whether to do prewhiten before generating embeddings or not.
             do_crop: Whether or not to do crop on images before generating features. Cropped
                       images will be the (image_size, image_size) shaped region on the centre
@@ -158,7 +166,9 @@ class FaceNet:
         self.logger_.info('Model dir: {}'.format(self.model_dir_))
         self.sess_, self.graph_ = self._load_model()
         self.closed_ = False
-        self.images_placeholder_, self.embeddings_tensor_, self.phase_train_placeholder_ = self._get_tensors()
+        (self.images_placeholder_,
+         self.embeddings_tensor_,
+         self.phase_train_placeholder_) = self._get_tensors()
         self.batch_size = batch_size
         self.image_size = image_size
         self.do_prewhiten = do_prewhiten
@@ -223,7 +233,8 @@ class FaceNet:
         if len(meta_files) == 0:
             raise ValueError('No meta file found in the model directory (%s)' % model_dir)
         elif len(meta_files) > 1:
-            raise ValueError('There should not be more than one meta file in the model directory (%s)'
+            raise ValueError('There should not be more than one meta file in\
+             the model directory (%s)'
                              % model_dir)
         meta_file = meta_files[0]
         ckpt = tf.train.get_checkpoint_state(model_dir)
@@ -464,5 +475,167 @@ class FaceNet:
         return image
 
 
+class FaceDetector:
+    """A class for detecting faces in images or frames.
+
+    Give image to 'detect_faces' method, and it will return all faces as an array.
+
+    Public methods:
+        detect_faces: detects faces in given image.
+
+    Attributes:
+        detector_: dlib's HOG-based frontal face detector.
+    """
+
+    def __init__(self):
+        self.detector_ = dlib.get_frontal_face_detector()
+
+    def detect_faces(self, gray_image):
+        """Detects faces in given image.
+
+        Args:
+            image: gray-scale image
+
+        Returns:
+            detected faces: an array of rectangles.
+        """
+
+        # resized_image = self._resize_image(image, out_pixels_wide=800)
+        # gray = skcolor.rgb2rgb2gray(resized_image)
+        rects = self.detector_(gray_image, 0)  # Detect faces in the gray scale frame
+        return rects
+
+    @staticmethod
+    def _resize_image(img, out_pixels_wide):
+        ratio = out_pixels_wide / img.shape[1]
+        dim = (int(out_pixels_wide), int(img.shape[0] * ratio))
+        resized = cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
+        return resized
+
+
 class FaceAligner:
-    pass
+    """Aligns faces, use aligned faces for generating embeddings using FaceNet.
+
+    Public methods:
+        align: aligns faces found in given image.
+
+    Attributes:
+        predictor_: dlib's facial shape predictor (5 landmarks).
+        landmarks_idxs_: Positions for output landmarks.
+        desired_left_eye: Desired output left eye position, given in a (x, y) tuple.
+            Percentages between (0.2, 0.4), With 20% you’ll basically be getting a
+            “zoomed in” view of the face, whereas with larger values the face will
+            appear more “zoomed out.”
+        desired_face_width: Output images width, in pixels.
+    """
+
+    def __init__(self,
+                 predictor_name='shape_predictor_5_face_landmarks.dat',
+                 desired_left_eye=(0.35, 0.35),
+                 desired_face_width=182):
+        """Init a FaceAligner instance.
+
+        Args:
+            predictor_name: name of dlib's facial shape predictor (5 landmarks) located in\
+             models/shape_predictor/
+            desired_left_eye: Desired output left eye position, given in a (x, y) tuple.
+                Percentages between (0.2, 0.4), With 20% you’ll basically be getting a
+                “zoomed in” view of the face, whereas with larger values the face will
+                appear more “zoomed out.”
+            desired_face_width: Output images width, in pixels.
+        """
+
+        predictor_dir = os.path.join(os.path.dirname(__file__) + '/models/shape_predictor/',
+                                     predictor_name)
+        self.predictor_ = dlib.shape_predictor(predictor_dir)
+        FACIAL_LANDMARKS_5_IDXS = OrderedDict([
+            ("right_eye", (2, 3)),
+            ("left_eye", (0, 1)),
+            ("nose", (4,))
+        ])
+        self.landmarks_idxs_ = FACIAL_LANDMARKS_5_IDXS
+        self.desired_left_eye = desired_left_eye
+        self.desired_right_eye = (1.0 - self.desired_left_eye[0], self.desired_left_eye[1])
+        self.desired_face_width = desired_face_width
+        self.desired_face_height = desired_face_width
+        # self.dst_coords_ = self._get_dst_coords()
+
+    def align(self, image, rects):
+        """Aligns the faces specified by rects in image.
+
+        Args:
+            image: The RGB input image.
+            rects: The bounding box rectangles produced by dlib’s HOG face detector.
+
+        Returns:
+            a list of aligned faces.
+        """
+
+        gray = skcolor.rgb2gray(image).astype(np.uint8)
+        outputs = list()
+        for rect in rects:
+            shape = self.predictor_(gray, rect)
+            predicted_coords = self._shape_to_np(shape)
+
+            tform_mat = self._get_rotation_mat(predicted_coords)
+
+            output = self._apply_transformation(image, tform_mat)
+            outputs.append(output)
+
+        # return the aligned faces
+        return outputs
+
+    def _apply_transformation(self, image, M):
+        (w, h) = (self.desired_face_width, self.desired_face_height)
+        output = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC)
+        return output
+
+    def _get_rotation_mat(self, predicted_coords):
+        eyes_center, angle, scale = self._calc_mat_params(predicted_coords)
+        M = cv2.getRotationMatrix2D(eyes_center, angle, scale)
+
+        # update the translation component of the matrix
+        tX = self.desired_face_width * 0.5
+        tY = self.desired_face_height * self.desired_left_eye[1]
+        M[0, 2] += (tX - eyes_center[0])
+        M[1, 2] += (tY - eyes_center[1])
+        return M
+
+    def _calc_mat_params(self, predicted_coords):
+        (left_eye_start, left_eye_end) = self.landmarks_idxs_["left_eye"]
+        (right_eye_start, right_eye_end) = self.landmarks_idxs_["right_eye"]
+
+        left_eye_pts = predicted_coords[left_eye_start: left_eye_end + 1]
+        right_eye_pts = predicted_coords[right_eye_start: right_eye_end + 1]
+
+        left_eye_center = left_eye_pts.mean(axis=0).astype("int")
+        right_eye_center = right_eye_pts.mean(axis=0).astype("int")
+
+        dY = right_eye_center[1] - left_eye_center[1]
+        dX = right_eye_center[0] - left_eye_center[0]
+        angle = np.degrees(np.arctan2(dY, dX)) - 180
+
+        desired_right_eye_x = 1.0 - self.desired_left_eye[0]
+
+        dist = np.sqrt((dX ** 2) + (dY ** 2))
+        desired_dist = (desired_right_eye_x - self.desired_left_eye[0])
+        desired_dist *= self.desired_face_width
+        scale = desired_dist / dist
+
+        eyes_center = ((left_eye_center[0] + right_eye_center[0]) // 2,
+                       (left_eye_center[1] + right_eye_center[1]) // 2)
+        return eyes_center, angle, scale
+
+    @staticmethod
+    def _shape_to_np(shape, dtype="int"):
+
+        # Initialize the list of (x, y)-coordinates
+        coords = np.zeros((shape.num_parts, 2), dtype=dtype)
+
+        # loop over all facial landmarks and convert them
+        # to a 2-tuple of (x, y)-coordinates
+        for i in range(0, shape.num_parts):
+            coords[i] = (shape.part(i).x, shape.part(i).y)
+
+        # return the list of (x, y)-coordinates
+        return coords
