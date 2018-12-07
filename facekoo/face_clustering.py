@@ -35,6 +35,8 @@ class FaceClusering:
     def __init__(self, args):
         self.facenet_model_ = None
         self.clusterer_ = None
+        self.face_detector_ = None
+        self.face_aligner_ = None
 
     def do_clustering(self, X):
         """Clustering on given samples.
@@ -514,7 +516,7 @@ class FaceDetector:
 
 
 class FaceAligner:
-    """Aligns faces, use aligned faces for generating embeddings using FaceNet.
+    """Aligns faces, use aligned faces for generating embeddings via FaceNet.
 
     Public methods:
         align: aligns faces found in given image.
@@ -558,7 +560,6 @@ class FaceAligner:
         self.desired_right_eye = (1.0 - self.desired_left_eye[0], self.desired_left_eye[1])
         self.desired_face_width = desired_face_width
         self.desired_face_height = desired_face_width
-        # self.dst_coords_ = self._get_dst_coords()
 
     def align(self, image, rects):
         """Aligns the faces specified by rects in image.
@@ -577,24 +578,41 @@ class FaceAligner:
             shape = self.predictor_(gray, rect)
             predicted_coords = self._shape_to_np(shape)
 
-            tform_mat = self._get_rotation_mat(predicted_coords)
+            tform_mat = self._calc_transform_mat(predicted_coords)
 
             output = self._apply_transformation(image, tform_mat)
             outputs.append(output)
 
-        # return the aligned faces
         return outputs
 
     def _apply_transformation(self, image, M):
+        """Applies affine transform to given image using given matrix.
+
+        Args:
+            image: RGB image
+            M: transformation matrix
+
+        Returns:
+            Aligned face
+        """
+
         (w, h) = (self.desired_face_width, self.desired_face_height)
         output = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC)
         return output
 
-    def _get_rotation_mat(self, predicted_coords):
+    def _calc_transform_mat(self, predicted_coords):
+        """Generates transorfmation matrix.
+
+        Args:
+            predicted_coords: predicted landmarks' coordinates
+
+        Returns:
+            Transorm matrix, should given to warpAffine
+        """
+
         eyes_center, angle, scale = self._calc_mat_params(predicted_coords)
         M = cv2.getRotationMatrix2D(eyes_center, angle, scale)
 
-        # update the translation component of the matrix
         tX = self.desired_face_width * 0.5
         tY = self.desired_face_height * self.desired_left_eye[1]
         M[0, 2] += (tX - eyes_center[0])
