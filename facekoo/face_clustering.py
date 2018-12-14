@@ -30,13 +30,51 @@ import dlib
 from collections import OrderedDict
 import cv2
 
+from .clustering import ROCWClustering
+
 
 class FaceClusering:
-    def __init__(self, args):
-        self.facenet_model_ = None
-        self.clusterer_ = None
-        self.face_detector_ = None
-        self.face_aligner_ = None
+    """Performs clustering on faces, based on embeddings, images or video.
+
+    Naming rules:
+        self.name : externally given parameters (as argument), and public
+         parameters
+        self.name_ : internally created, non-public parameters
+        self.name() : public methods
+        self._name() : internal methods
+
+
+    Public methods:
+        do_clustering: Clustering on given samples as array of arrays.
+        do_clustering_on_images: Clustering on given list of RGB images.
+        do_clustering_on_image_paths: Clustering on images found on specified paths.
+        do_clustering_on_video: Clustering on given video path.
+        evaluate: Evaluates clustering algorithm on given data.
+        evaluate_on_images: Evaluates clustering on given images
+
+    Attributes:
+        clusterer_: An instance of ROCWClustering algorithm.
+        facenet_model_: An instance of FaceNet model, for generating embeddings.
+        face_detector_: An instance of FaceDetector, for detecting faces in images.
+        face_aligner_: An instance of FaceAligner, for aligning found faces.
+
+    """
+
+    def __init__(self, k=20, metric='euclidean', n_iteration=5, algorithm='ball_tree',
+                 fn_model_name='20180402-114759', batch_size=32,
+                 image_size=160, do_prewhiten=True, do_crop=True,
+                 predictor_name='shape_predictor_5_face_landmarks.dat',
+                 desired_left_eye=(0.35, 0.35), desired_face_width=182):
+
+        self.clusterer_ = ROCWClustering(k=k, metric=metric,
+                                         n_iteration=n_iteration, algorithm=algorithm)
+        self.facenet_model_ = FaceNet(model_name=fn_model_name, batch_size=batch_size,
+                                      image_size=image_size, do_prewhiten=do_prewhiten,
+                                      do_crop=do_crop)
+        self.face_detector_ = FaceDetector()
+        self.face_aligner_ = FaceAligner(predictor_name=predictor_name,
+                                         desired_left_eye=desired_left_eye,
+                                         desired_face_width=desired_face_width)
 
     def do_clustering(self, X):
         """Clustering on given samples.
@@ -49,10 +87,13 @@ class FaceClusering:
             an array that contains predicted labels for given X.
         """
 
-        pass
+        labels = self.clusterer_.fit_predict(X)
+        return labels
 
     def do_clustering_on_images(self, images):
         """Clustering on given images.
+
+        Note: this method performs clustering on faces + flipped faces.
 
         Args:
             images: list of RGB images.
@@ -61,7 +102,22 @@ class FaceClusering:
             an array that contains predicted labels for given images.
         """
 
-        pass
+        embeddings = list()
+        flipped_faces = list()
+        for image in images:
+            rects = self.face_detector_.detect_faces(image)
+            if not rects:
+                continue
+            aligned_faces = self.face_aligner_.align(image, rects)
+            for face in aligned_faces:
+                flipped_faces.append(cv2.flip(face, 1))
+            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
+            embeddings.extend(embs)
+        n_faces = len(embeddings)
+        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
+        embeddings.extend(flipped_embs)
+        labels = self.clusterer_.fit_predict(embeddings)[: n_faces]
+        return labels
 
     def do_clustering_on_image_paths(self, image_paths):
         """Clustering on images found on specified paths.
@@ -73,7 +129,23 @@ class FaceClusering:
             an array that contains predicted labels for given images.
         """
 
-        pass
+        embeddings = list()
+        flipped_faces = list()
+        for img_path in image_paths:
+            image = skio.imread(img_path)
+            rects = self.face_detector_.detect_faces(image)
+            if not rects:
+                continue
+            aligned_faces = self.face_aligner_.align(image, rects)
+            for face in aligned_faces:
+                flipped_faces.append(cv2.flip(face, 1))
+            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
+            embeddings.extend(embs)
+        n_faces = len(embeddings)
+        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
+        embeddings.extend(flipped_embs)
+        labels = self.clusterer_.fit_predict(embeddings)[: n_faces]
+        return labels
 
     def do_clustering_on_video(self, video_path):
         """Clustering on given video path.
@@ -86,7 +158,34 @@ class FaceClusering:
                 {cluster1: [face1, face2, ...], cluster2: [face1, face2], ...}
         """
 
-        pass
+        stream = cv2.VideoCapture(video_path)
+        embeddings = list()
+        flipped_faces = list()
+
+        counter = 0
+        while stream.isOpened():
+            ret, frame = stream.read()
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rects = self.face_detector_.detect_faces(rgb_frame)
+            if not rects:
+                continue
+            aligned_faces = self.face_aligner_.align(rgb_frame, rects)
+            for face in aligned_faces:
+                path_to_save = os.path.join(os.path.dirname(video_path), 'found_faces')
+                path_to_save = os.path.join(path_to_save, str(counter))
+                skio.imsave(path_to_save + '.jpg', face)
+                counter += 1
+                flipped_faces.append(cv2.flip(face, 1))
+            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
+            embeddings.extend(embs)
+
+        stream.release()
+
+        n_faces = len(embeddings)
+        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
+        embeddings.extend(flipped_embs)
+        labels = self.clusterer_.fit_predict(embeddings)[: n_faces]
+        return labels
 
     def evaluate(self, X, y_true):
         """Evaluates clustering algorithm on given data.
@@ -99,7 +198,7 @@ class FaceClusering:
             pairwise f-measure
         """
 
-        pass
+        return self.clusterer_.score(X, y_true)
 
     def evaluate_on_images(self, images, labels):
         """Evaluates clustering on given images.
@@ -112,7 +211,21 @@ class FaceClusering:
             pairwise f-measure
         """
 
-        pass
+        embeddings = list()
+        flipped_faces = list()
+        for image in images:
+            rects = self.face_detector_.detect_faces(image)
+            if not rects:
+                continue
+            aligned_faces = self.face_aligner_.align(image, rects)
+            for face in aligned_faces:
+                flipped_faces.append(cv2.flip(face, 1))
+            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
+            embeddings.extend(embs)
+        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
+        embeddings.extend(flipped_embs)
+
+        return self.clusterer_.score(embeddings, labels)
 
     def __enter__(self):
         """Returns model when object enters a "with" block"""
@@ -492,19 +605,19 @@ class FaceDetector:
     def __init__(self):
         self.detector_ = dlib.get_frontal_face_detector()
 
-    def detect_faces(self, gray_image):
+    def detect_faces(self, image):
         """Detects faces in given image.
 
         Args:
-            image: gray-scale image
+            image: RGB image
 
         Returns:
             detected faces: an array of rectangles.
         """
 
         # resized_image = self._resize_image(image, out_pixels_wide=800)
-        # gray = skcolor.rgb2rgb2gray(resized_image)
-        rects = self.detector_(gray_image, 0)  # Detect faces in the gray scale frame
+        gray = skcolor.rgb2rgb2gray(image)
+        rects = self.detector_(gray, 0)  # Detect faces in the gray scale frame
         return rects
 
     @staticmethod
