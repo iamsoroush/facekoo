@@ -70,7 +70,6 @@ class ROCWClustering(BaseClustering):
 
     Using rank-order distances generate a graph, and feed this graph to ChineseWhispers
      algorithm for clustering.
-
     """
 
     def __init__(self, k=20, metric='euclidean', n_iteration=5, algorithm='ball_tree'):
@@ -145,7 +144,8 @@ class ROGraph:
             for each data point.
         """
 
-        nbrs = NearestNeighbors(n_neighbors=self.k, algorithm=self.knn_algorithm, metric=self.metric).fit(X)
+        nbrs = NearestNeighbors(n_neighbors=self.k, algorithm=self.knn_algorithm,
+                                metric=self.metric).fit(X)
         ordered_absolute_distances, order_lists = nbrs.kneighbors(X)
         return ordered_absolute_distances, order_lists
 
@@ -177,8 +177,10 @@ class ROGraph:
         pw_dist = 0.0
         if np.any(order_list_a == order_list_b):
             order_b_in_a, order_a_in_b = self._calc_orders(ind_a, ind_b, order_list_a, order_list_b)
-            d_m_ab = self._calc_dm(ind_a, ind_b, order_list_a, order_list_b, order_b_in_a, order_a_in_b)
-            d_m_ba = self._calc_dm(ind_b, ind_a, order_list_b, order_list_a, order_a_in_b, order_b_in_a)
+            d_m_ab = self._calc_dm(ind_a, ind_b, order_list_a, order_list_b,
+                                   order_b_in_a, order_a_in_b)
+            d_m_ba = self._calc_dm(ind_b, ind_a, order_list_b, order_list_a,
+                                   order_a_in_b, order_b_in_a)
             pw_dist = (d_m_ab + d_m_ba) / min(order_a_in_b, order_b_in_a)
         return pw_dist
 
