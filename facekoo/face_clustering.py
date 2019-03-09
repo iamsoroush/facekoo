@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import dlib
 from collections import OrderedDict
 import cv2
+import skvideo.io as videoio
 
 from .clustering import ROCWClustering
 
@@ -90,62 +91,45 @@ class FaceClusering:
         labels = self.clusterer_.fit_predict(X)
         return labels
 
-    def do_clustering_on_images(self, images):
-        """Clustering on given images.
+    def do_clustering_on_images(self, image_folder):
+        """Clustering on images found on specified folder.
 
-        Note: this method performs clustering on faces + flipped faces.
-
-        Args:
-            images: list of RGB images.
-
-        Returns:
-            an array that contains predicted labels for given images.
-        """
-
-        embeddings = list()
-        flipped_faces = list()
-        for image in images:
-            rects = self.face_detector_.detect_faces(image)
-            if not rects:
-                continue
-            aligned_faces = self.face_aligner_.align(image, rects)
-            for face in aligned_faces:
-                flipped_faces.append(cv2.flip(face, 1))
-            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
-            embeddings.extend(embs)
-        n_faces = len(embeddings)
-        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
-        embeddings.extend(flipped_embs)
-        labels = self.clusterer_.fit_predict(embeddings)[: n_faces]
-        return labels
-
-    def do_clustering_on_image_paths(self, image_paths):
-        """Clustering on images found on specified paths.
+        Finds and aligns faces, saves faces in a new folder called "found_faces" on given path,
+         then performs clustering on found faces.
 
         Args:
-            image_paths: list of complete paths to images
+            image_folder: folder of images.
 
         Returns:
-            an array that contains predicted labels for given images.
+            A dictionary that maps each found_face_name to its label.
         """
 
-        embeddings = list()
-        flipped_faces = list()
-        for img_path in image_paths:
-            image = skio.imread(img_path)
-            rects = self.face_detector_.detect_faces(image)
-            if not rects:
-                continue
-            aligned_faces = self.face_aligner_.align(image, rects)
-            for face in aligned_faces:
-                flipped_faces.append(cv2.flip(face, 1))
-            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
-            embeddings.extend(embs)
-        n_faces = len(embeddings)
-        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
-        embeddings.extend(flipped_embs)
-        labels = self.clusterer_.fit_predict(embeddings)[: n_faces]
-        return labels
+        image_folder = os.path.expanduser(image_folder)
+        face_paths, embs = self._detect_align_save_path(image_folder)
+        if not face_paths:
+            print('Can not find any faces.')
+            return list(), list()
+        labels = self.clusterer_.fit_predict(embs)
+
+        return np.array(face_paths), labels
+
+    def show_cluster(self, face_paths, labels, cluster_name):
+        """Shows all members of given cluster in a single image."""
+
+        indices = np.where(labels == cluster_name)[0]
+        faces = face_paths[indices]
+        fig = self._plot_faces(faces)
+        fig.show()
+        return
+
+    def _plot_faces(self, face_paths):
+        dim = int(np.sqrt(len(face_paths))) + 1
+        fig, axes = plt.subplots(nrows=dim, ncols=dim, figsize=(12, 12))
+        for i, ax in enumerate(axes.flatten()):
+            if i >= len(face_paths):
+                break
+            ax.imshow(skio.imread(face_paths[i]))
+        return fig
 
     def do_clustering_on_video(self, video_path):
         """Clustering on given video path.
@@ -158,34 +142,47 @@ class FaceClusering:
                 {cluster1: [face1, face2, ...], cluster2: [face1, face2], ...}
         """
 
-        stream = cv2.VideoCapture(video_path)
-        embeddings = list()
-        flipped_faces = list()
+        face_paths, embs = self._das_video(video_path)
+        if not face_paths:
+            print('Can not find any faces.')
+            return list(), list()
+        labels = self.clusterer_.fit_predict(embs)
+
+        return np.array(face_paths), labels
+
+    def _das_video(self, video_path):
+        """"""
+
+        folder_name = os.path.dirname(video_path)
+        faces_folder = os.path.join(folder_name, 'found_faces')
+        if not os.path.exists(faces_folder):
+            os.mkdir(faces_folder)
+
+        videogen = videoio.vreader(video_path)
 
         counter = 0
-        while stream.isOpened():
-            ret, frame = stream.read()
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rects = self.face_detector_.detect_faces(rgb_frame)
-            if not rects:
+        embs = list()
+        face_paths = list()
+        last_frame = None
+        for frame in videogen:
+            if last_frame is not None:
+                corr = np.abs(np.corrcoef(last_frame.flatten(), frame.flatten())[0, 1])
+                if corr > 0.95:
+                    last_frame = frame.copy()
+                    continue
+
+            aligned_faces = self._detect_align(frame)
+            if not aligned_faces:
                 continue
-            aligned_faces = self.face_aligner_.align(rgb_frame, rects)
-            for face in aligned_faces:
-                path_to_save = os.path.join(os.path.dirname(video_path), 'found_faces')
-                path_to_save = os.path.join(path_to_save, str(counter))
-                skio.imsave(path_to_save + '.jpg', face)
-                counter += 1
-                flipped_faces.append(cv2.flip(face, 1))
-            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
-            embeddings.extend(embs)
+            embs.extend(self.facenet_model_.generate_embeddings_from_images(aligned_faces))
+            for j, face in enumerate(aligned_faces):
+                face_path = os.path.join(faces_folder, '{}_{}.jpg'.format(counter, j))
+                skio.imsave(face_path, face)
+                face_paths.append(face_path)
+            counter += 1
+            last_frame = frame.copy()
 
-        stream.release()
-
-        n_faces = len(embeddings)
-        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
-        embeddings.extend(flipped_embs)
-        labels = self.clusterer_.fit_predict(embeddings)[: n_faces]
-        return labels
+        return face_paths, embs
 
     def evaluate(self, X, y_true):
         """Evaluates clustering algorithm on given data.
@@ -226,6 +223,41 @@ class FaceClusering:
         embeddings.extend(flipped_embs)
 
         return self.clusterer_.score(embeddings, labels)
+
+    def _detect_align(self, image):
+        """Detects faces, aligns and returns them."""
+
+        rects = self.face_detector_.detect_faces(image)
+        if not rects:
+            return []
+        aligned_faces = self.face_aligner_.align(image, rects)
+        return aligned_faces
+
+    def _detect_align_save_path(self, img_folder_path):
+        """Detects faces, aligns them and saves them in a new folder"""
+
+        image_paths = [os.path.join(img_folder_path, img_name)
+                       for img_name in os.listdir(img_folder_path)]
+        face_paths = list()
+        if not image_paths:
+            return face_paths
+
+        face_folder = os.path.join(img_folder_path, 'found_faces')
+        if not os.path.exists(face_folder):
+            os.mkdir(face_folder)
+
+        embs = list()
+        for i, path in enumerate(image_paths):
+            image = skio.imread(path)
+            aligned_faces = self._detect_align(image)
+            if not aligned_faces:
+                continue
+            embs.extend(self.facenet_model_.generate_embeddings_from_images(aligned_faces))
+            for j, face in enumerate(aligned_faces):
+                face_path = os.path.join(face_folder, '{}_{}.jpg'.format(i, j))
+                skio.imsave(face_path, face)
+                face_paths.append(face_path)
+        return face_paths, embs
 
     def __enter__(self):
         """Returns model when object enters a "with" block"""
@@ -616,7 +648,7 @@ class FaceDetector:
         """
 
         # resized_image = self._resize_image(image, out_pixels_wide=800)
-        gray = skcolor.rgb2rgb2gray(image)
+        gray = (skcolor.rgb2gray(image) * 255).astype(np.uint8)
         rects = self.detector_(gray, 0)  # Detect faces in the gray scale frame
         return rects
 
