@@ -25,17 +25,17 @@ And here are the found clusters(persons):
 # Usage
 
 1. Install requirements:
-..*`python==3.7`
-..*`tensorflow-gpu==1.13.1`
-..*`keras==2.3.1`
-..*`dlib==19.19.0`
-..*`jupyter`
-..*`opencv==3.4.2`
-..*`scikit-learn==0.22.1`
-..*`tqdm`
+  * `python==3.7`
+  * `tensorflow-gpu==1.13.1`
+  * `keras==2.3.1`
+  * `dlib==19.19.0`
+  * `jupyter`
+  * `opencv==3.4.2`
+  * `scikit-learn==0.22.1`
+  * `tqdm`
 
 2. Download [facenet model](https://drive.google.com/file/d/1EXPBSXwTaqrSC0OhUdXNmKSh9qJUQ55-/view) and place it in _models_ directory.
 3. Download dlib's [cnn-face-detector](http://dlib.net/files/mmod_human_face_detector.dat.bz2) model and unzip it in _models_ directory.
 4. Download dlib's [shape-predictor](http://dlib.net/files/shape_predictor_5_face_landmarks.dat.bz2) model and unzip it in _models_ directory.
 
-For finding the individual persons in a folder of images, inspect this notebook, and for processing a video take a look at this one.
+For finding the individual persons in a folder of images, inspect [this notebook](https://github.com/iamsoroush/facekoo/blob/master/cluster_images.ipynb), and for processing a video take a look at [this one](https://github.com/iamsoroush/facekoo/blob/master/cluster_video.ipynb).
