@@ -25,14 +25,14 @@ And here are the found clusters(persons):
 # Usage
 
 1. Install requirements:
-`python==3.7`
-`tensorflow-gpu==1.13.1`
-`keras==2.3.1`
-`dlib==19.19.0`
-`jupyter`
-`opencv==3.4.2`
-`scikit-learn==0.22.1`
-`tqdm`
+..*`python==3.7`
+..*`tensorflow-gpu==1.13.1`
+..*`keras==2.3.1`
+..*`dlib==19.19.0`
+..*`jupyter`
+..*`opencv==3.4.2`
+..*`scikit-learn==0.22.1`
+..*`tqdm`
 
 2. Download [facenet model](https://drive.google.com/file/d/1EXPBSXwTaqrSC0OhUdXNmKSh9qJUQ55-/view) and place it in _models_ directory.
 3. Download dlib's [cnn-face-detector](http://dlib.net/files/mmod_human_face_detector.dat.bz2) model and unzip it in _models_ directory.
