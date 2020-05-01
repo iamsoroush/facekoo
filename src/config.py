@@ -28,7 +28,7 @@ class FaceKooConfig:
     DLIB_FACE_DETECTOR_PATH = join(MODELS_DIR, 'mmod_human_face_detector.dat')
 
     # Download dlib's facial shape predictor and unzip it:
-    # http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
+    # http://dlib.net/files/shape_predictor_5_face_landmarks.dat.bz2
     DLIB_FACIAL_SHAPE_PREDICTOR_PATH = join(MODELS_DIR, 'shape_predictor_5_face_landmarks.dat')
     FACE_ALIGNER_OUTPUT_SIZE = 182
     FACE_ALIGNER_LEFT_EYE = (0.35, 0.35)
