@@ -16,6 +16,7 @@ from sklearn.neighbors import NearestNeighbors
 
 
 class BaseClustering:
+
     def __init__(self):
         pass
 
@@ -66,20 +67,25 @@ class BaseClustering:
 
 
 class ROCWClustering(BaseClustering):
+
     """Approximated rank-order clustering implemented using Chinese Whispers algorithm.
 
     Using rank-order distances generate a graph, and feed this graph to ChineseWhispers
      algorithm for clustering.
     """
 
-    def __init__(self, k=20, metric='euclidean', n_iteration=5, algorithm='ball_tree'):
+    def __init__(self, k, metric, n_iteration, algorithm):
+        super().__init__()
         self.k = k
         self.metric = metric
         self.n_iteration = n_iteration
         self.knn_algorithm = algorithm
 
     def fit_predict(self, X):
-        graph = ROGraph(self.k, self.metric, algorithm=self.knn_algorithm)
+        if len(X) > self.k:
+            graph = ROGraph(self.k, self.metric, algorithm=self.knn_algorithm)
+        else:
+            graph = ROGraph(len(X), self.metric, algorithm=self.knn_algorithm)
         adjacency_mat = graph.generate_graph(X)
         clusterer = ChineseWhispersClustering(self.n_iteration)
         labels = clusterer.fit_predict(adjacency_mat)
@@ -87,12 +93,14 @@ class ROCWClustering(BaseClustering):
 
 
 class ChineseWhispersClustering:
+
     def __init__(self, n_iteration=5):
         self.n_iteration = n_iteration
         self.adjacency_mat_ = None
         self.labels_ = None
 
     def fit_predict(self, adjacency_mat):
+
         """Fits and returns labels for samples"""
 
         n_nodes = adjacency_mat.shape[0]
@@ -123,7 +131,9 @@ class ChineseWhispersClustering:
 
 
 class ROGraph:
+
     def __init__(self, k, metric, algorithm):
+
         self.k = k
         self.metric = metric
         self.knn_algorithm = algorithm
@@ -134,28 +144,30 @@ class ROGraph:
         return self.adjacency_mat_
 
     def generate_graph(self, X):
-        ordered_distances, order_lists = self._get_knns(X)
-        pw_distances = self._generate_normalized_pw_distances(ordered_distances, order_lists)
+        order_lists = self._get_knns(X)
+        pw_distances = self._generate_normalized_pw_distances(order_lists)
         adjacency_mat = self._generate_adjacency_mat(pw_distances)
         return adjacency_mat
 
     def _get_knns(self, X):
+
         """Generates order lists and absolute distances of k-nearest-neighbors
             for each data point.
         """
 
-        nbrs = NearestNeighbors(n_neighbors=self.k, algorithm=self.knn_algorithm,
+        nbrs = NearestNeighbors(n_neighbors=self.k,
+                                algorithm=self.knn_algorithm,
                                 metric=self.metric).fit(X)
-        ordered_absolute_distances, order_lists = nbrs.kneighbors(X)
-        return ordered_absolute_distances, order_lists
+        _, order_lists = nbrs.kneighbors(X)
+        return order_lists
 
-    def _generate_normalized_pw_distances(self, ordered_distances, order_lists):
-        n_samples = len(ordered_distances)
+    def _generate_normalized_pw_distances(self, order_lists):
+        n_samples = len(order_lists)
         combs = itertools.combinations([i for i in range(n_samples)], 2)
         pw_distances = np.zeros((n_samples, n_samples))
         for ind1, ind2 in combs:
             order_list_1, order_list_2 = order_lists[ind1], order_lists[ind2]
-            pw_dist = self._calc_pw_dist(ind1, ind2, order_list_1, order_list_2, ordered_distances)
+            pw_dist = self._calc_pw_dist(ind1, ind2, order_list_1, order_list_2)
             pw_distances[ind1, ind2] = pw_dist
         pw_distances = pw_distances / pw_distances.max()
         pw_distances = pw_distances + pw_distances.T
@@ -173,33 +185,30 @@ class ROGraph:
         adjacency_mat = (1 - distances) * mask_mat
         return adjacency_mat
 
-    def _calc_pw_dist(self, ind_a, ind_b, order_list_a, order_list_b, ordered_distances):
+    def _calc_pw_dist(self, ind_a, ind_b, order_list_a, order_list_b):
         pw_dist = 0.0
-        if np.any(order_list_a == order_list_b):
+        if np.any(np.intersect1d(order_list_a, order_list_b)):
             order_b_in_a, order_a_in_b = self._calc_orders(ind_a, ind_b, order_list_a, order_list_b)
-            d_m_ab = self._calc_dm(ind_a, ind_b, order_list_a, order_list_b,
-                                   order_b_in_a, order_a_in_b)
-            d_m_ba = self._calc_dm(ind_b, ind_a, order_list_b, order_list_a,
-                                   order_a_in_b, order_b_in_a)
-            pw_dist = (d_m_ab + d_m_ba) / min(order_a_in_b, order_b_in_a)
+            d_m_ab = self._calc_dm(order_list_a, order_list_b, order_b_in_a)
+            d_m_ba = self._calc_dm(order_list_b, order_list_a, order_a_in_b)
+            min_of_two = min(order_a_in_b, order_b_in_a)
+            pw_dist = (d_m_ab + d_m_ba) / min_of_two
         return pw_dist
 
     def _calc_orders(self, ind_a, ind_b, order_list_a, order_list_b):
         order_b_in_a = np.where(order_list_a == ind_b)[0]
-        if not order_b_in_a.size:
+        if not np.any(order_b_in_a):
             order_b_in_a = self.k
         else:
             order_b_in_a = order_b_in_a[0]
         order_a_in_b = np.where(order_list_b == ind_a)[0]
-        if not order_a_in_b.size:
+        if not np.any(order_a_in_b):
             order_a_in_b = self.k
         else:
             order_a_in_b = order_a_in_b[0]
         return order_b_in_a, order_a_in_b
 
-    def _calc_dm(self,
-                 ind_a, ind_b, order_list_a, order_list_b,
-                 order_b_in_a, ordered_distances):
+    def _calc_dm(self, order_list_a, order_list_b, order_b_in_a):
         dist = 0
         for i in range(min(self.k, order_b_in_a)):
             sample_index = order_list_a[i]

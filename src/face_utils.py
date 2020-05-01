@@ -1,18 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Face clustering module.
-
-   This file contains FaceClustering class.
-   It uses facenet's pretrained CNN for feature extraction, and uses predefined
-    clustering algorithms for performing clustering on images or video files.
-
-   Instantiate an object from this class, tune the model on your own data if
-    needed, and enjoy clustered faces.
-
-
-   You can use the model in context manager mode, but the session will
-    terminate at the end of the 'with' block. When using in standard way,
-    the background tensorflow session wouldn't terminate in order to avoid
-    redundant operations.
+"""Face-related utils needed for clustering faces.
 """
 # Author: Soroush Moazed <soroush.moazed@gmail.com>
 
@@ -29,246 +16,10 @@ import matplotlib.pyplot as plt
 import dlib
 from collections import OrderedDict
 import cv2
-import skvideo.io as videoio
-
-from .clustering import ROCWClustering
-
-
-class FaceClusering:
-    """Performs clustering on faces, based on embeddings, images or video.
-
-    Naming rules:
-        self.name : externally given parameters (as argument), and public
-         parameters
-        self.name_ : internally created, non-public parameters
-        self.name() : public methods
-        self._name() : internal methods
-
-
-    Public methods:
-        do_clustering: Clustering on given samples as array of arrays.
-        do_clustering_on_images: Clustering on given list of RGB images.
-        do_clustering_on_image_paths: Clustering on images found on specified paths.
-        do_clustering_on_video: Clustering on given video path.
-        evaluate: Evaluates clustering algorithm on given data.
-        evaluate_on_images: Evaluates clustering on given images
-
-    Attributes:
-        clusterer_: An instance of ROCWClustering algorithm.
-        facenet_model_: An instance of FaceNet model, for generating embeddings.
-        face_detector_: An instance of FaceDetector, for detecting faces in images.
-        face_aligner_: An instance of FaceAligner, for aligning found faces.
-
-    """
-
-    def __init__(self, k=20, metric='euclidean', n_iteration=5, algorithm='ball_tree',
-                 fn_model_name='20180402-114759', batch_size=32,
-                 image_size=160, do_prewhiten=True, do_crop=True,
-                 predictor_name='shape_predictor_5_face_landmarks.dat',
-                 desired_left_eye=(0.35, 0.35), desired_face_width=182):
-
-        self.clusterer_ = ROCWClustering(k=k, metric=metric,
-                                         n_iteration=n_iteration, algorithm=algorithm)
-        self.facenet_model_ = FaceNet(model_name=fn_model_name, batch_size=batch_size,
-                                      image_size=image_size, do_prewhiten=do_prewhiten,
-                                      do_crop=do_crop)
-        self.face_detector_ = FaceDetector()
-        self.face_aligner_ = FaceAligner(predictor_name=predictor_name,
-                                         desired_left_eye=desired_left_eye,
-                                         desired_face_width=desired_face_width)
-
-    def do_clustering(self, X):
-        """Clustering on given samples.
-
-        Args:
-            X: an array of arrays, each row is a sample and columns are
-             features.
-
-        Returns:
-            an array that contains predicted labels for given X.
-        """
-
-        labels = self.clusterer_.fit_predict(X)
-        return labels
-
-    def do_clustering_on_images(self, image_folder):
-        """Clustering on images found on specified folder.
-
-        Finds and aligns faces, saves faces in a new folder called "found_faces" on given path,
-         then performs clustering on found faces.
-
-        Args:
-            image_folder: folder of images.
-
-        Returns:
-            A dictionary that maps each found_face_name to its label.
-        """
-
-        image_folder = os.path.expanduser(image_folder)
-        face_paths, embs = self._detect_align_save_path(image_folder)
-        if not face_paths:
-            print('Can not find any faces.')
-            return list(), list()
-        labels = self.clusterer_.fit_predict(embs)
-
-        return np.array(face_paths), labels
-
-    def show_cluster(self, face_paths, labels, cluster_name):
-        """Shows all members of given cluster in a single image."""
-
-        indices = np.where(labels == cluster_name)[0]
-        faces = face_paths[indices]
-        fig = self._plot_faces(faces)
-        fig.show()
-        return
-
-    def _plot_faces(self, face_paths):
-        dim = int(np.sqrt(len(face_paths))) + 1
-        fig, axes = plt.subplots(nrows=dim, ncols=dim, figsize=(12, 12))
-        for i, ax in enumerate(axes.flatten()):
-            if i >= len(face_paths):
-                break
-            ax.imshow(skio.imread(face_paths[i]))
-        return fig
-
-    def do_clustering_on_video(self, video_path):
-        """Clustering on given video path.
-
-        Args:
-            video_path: complete path to video.
-
-        Returns:
-            a dictionary containing cropped faces for each cluster:
-                {cluster1: [face1, face2, ...], cluster2: [face1, face2], ...}
-        """
-
-        face_paths, embs = self._das_video(video_path)
-        if not face_paths:
-            print('Can not find any faces.')
-            return list(), list()
-        labels = self.clusterer_.fit_predict(embs)
-
-        return np.array(face_paths), labels
-
-    def _das_video(self, video_path):
-        """"""
-
-        folder_name = os.path.dirname(video_path)
-        faces_folder = os.path.join(folder_name, 'found_faces')
-        if not os.path.exists(faces_folder):
-            os.mkdir(faces_folder)
-
-        videogen = videoio.vreader(video_path)
-
-        counter = 0
-        embs = list()
-        face_paths = list()
-        last_frame = None
-        for frame in videogen:
-            if last_frame is not None:
-                corr = np.abs(np.corrcoef(last_frame.flatten(), frame.flatten())[0, 1])
-                if corr > 0.95:
-                    last_frame = frame.copy()
-                    continue
-
-            aligned_faces = self._detect_align(frame)
-            if not aligned_faces:
-                continue
-            embs.extend(self.facenet_model_.generate_embeddings_from_images(aligned_faces))
-            for j, face in enumerate(aligned_faces):
-                face_path = os.path.join(faces_folder, '{}_{}.jpg'.format(counter, j))
-                skio.imsave(face_path, face)
-                face_paths.append(face_path)
-            counter += 1
-            last_frame = frame.copy()
-
-        return face_paths, embs
-
-    def evaluate(self, X, y_true):
-        """Evaluates clustering algorithm on given data.
-
-        Args:
-            X: an array of arrays
-            y_true: 1D array, true labels for each row of X
-
-        Returns:
-            pairwise f-measure
-        """
-
-        return self.clusterer_.score(X, y_true)
-
-    def evaluate_on_images(self, images, labels):
-        """Evaluates clustering on given images.
-
-        Args:
-            images: array of rgb images.
-            labels: array of labels for given images.
-
-        Returns:
-            pairwise f-measure
-        """
-
-        embeddings = list()
-        flipped_faces = list()
-        for image in images:
-            rects = self.face_detector_.detect_faces(image)
-            if not rects:
-                continue
-            aligned_faces = self.face_aligner_.align(image, rects)
-            for face in aligned_faces:
-                flipped_faces.append(cv2.flip(face, 1))
-            embs = self.facenet_model_.generate_embeddings_from_images(aligned_faces)
-            embeddings.extend(embs)
-        flipped_embs = self.facenet_model_.generate_embeddings_from_images(flipped_faces)
-        embeddings.extend(flipped_embs)
-
-        return self.clusterer_.score(embeddings, labels)
-
-    def _detect_align(self, image):
-        """Detects faces, aligns and returns them."""
-
-        rects = self.face_detector_.detect_faces(image)
-        if not rects:
-            return []
-        aligned_faces = self.face_aligner_.align(image, rects)
-        return aligned_faces
-
-    def _detect_align_save_path(self, img_folder_path):
-        """Detects faces, aligns them and saves them in a new folder"""
-
-        image_paths = [os.path.join(img_folder_path, img_name)
-                       for img_name in os.listdir(img_folder_path)]
-        face_paths = list()
-        if not image_paths:
-            return face_paths
-
-        face_folder = os.path.join(img_folder_path, 'found_faces')
-        if not os.path.exists(face_folder):
-            os.mkdir(face_folder)
-
-        embs = list()
-        for i, path in enumerate(image_paths):
-            image = skio.imread(path)
-            aligned_faces = self._detect_align(image)
-            if not aligned_faces:
-                continue
-            embs.extend(self.facenet_model_.generate_embeddings_from_images(aligned_faces))
-            for j, face in enumerate(aligned_faces):
-                face_path = os.path.join(face_folder, '{}_{}.jpg'.format(i, j))
-                skio.imsave(face_path, face)
-                face_paths.append(face_path)
-        return face_paths, embs
-
-    def __enter__(self):
-        """Returns model when object enters a "with" block"""
-
-        return self
-
-    def __exit__(self):
-        self.facenet_model_.close()
 
 
 class FaceNet:
+
     """FaceNet class containing the facenet model ready to generate embeddings
     for faces.
 
@@ -291,12 +42,17 @@ class FaceNet:
         sess_: tensorflow session that contains compiled pretrained facenet model.
     """
 
-    def __init__(self, model_name='20180402-114759', batch_size=32,
-                 image_size=160, do_prewhiten=True, do_crop=True):
+    def __init__(self,
+                 model_path,
+                 batch_size,
+                 image_size,
+                 do_prewhiten,
+                 do_crop):
+
         """Initialize a FaceNet model.
 
         Args:
-            model_name: model files must be on 'models/model_name' directory.
+            model_path: path to the pre-trained model.
             batch_size: size of batch to pass to tensorflow's session.run() for feature generation.
             image_size: facenet model will use images at this size if do_crop=True, all training and
                          testing images will be transformed to this size before feature generation.
@@ -309,7 +65,7 @@ class FaceNet:
         """
 
         self.logger_ = self._initialize_logger()
-        self.model_dir_ = os.path.join(os.path.dirname(__file__) + '/models/', model_name)
+        self.model_dir_ = os.path.join(os.path.dirname(__file__) + '/models/', model_path)
         self.logger_.info('Model dir: {}'.format(self.model_dir_))
         self.sess_, self.graph_ = self._load_model()
         self.closed_ = False
@@ -321,7 +77,9 @@ class FaceNet:
         self.do_prewhiten = do_prewhiten
         self.do_crop = do_crop
 
-    def _initialize_logger(self):
+    @staticmethod
+    def _initialize_logger():
+
         """Initializes a console logger for logging purposes."""
 
         console_handler = logging.StreamHandler()
@@ -333,6 +91,7 @@ class FaceNet:
         return logger
 
     def _load_model(self):
+
         """Loads and compiles pretrained model's graph and associated tensors.
 
         Returns:
@@ -356,6 +115,7 @@ class FaceNet:
         return sess, sess.graph
 
     def _get_tensors(self):
+
         """Returns needed tensors: placeholders and embeddings tensor."""
 
         images_placeholder = self.graph_.get_tensor_by_name("input:0")
@@ -366,6 +126,7 @@ class FaceNet:
 
     @staticmethod
     def _get_model_filenames(model_dir):
+
         """Searches specified paths for model files.
 
         Returns:
@@ -401,6 +162,7 @@ class FaceNet:
         return meta_file, ckpt_file
 
     def generate_embeddings_from_images(self, images):
+
         """Generate embeddings for given images.
 
         Args:
@@ -416,6 +178,7 @@ class FaceNet:
         return emb_array
 
     def generate_embeddings_from_paths(self, image_paths):
+
         """Generate embeddings for images found in specified paths.
 
         Args:
@@ -442,7 +205,9 @@ class FaceNet:
 
         return emb_array
 
-    def plot_2d_embeddings(self, embs, labels):
+    @staticmethod
+    def plot_2d_embeddings(embs, labels):
+
         """Plots embeddings after dimension reduction.
 
         For explatory tasks only.
@@ -481,12 +246,14 @@ class FaceNet:
         return
 
     def clean(self):
+
         """Closes background tensorflow session."""
 
         self.sess_.close()
         self.closed_ = True
 
     def _generate_embeddings(self, images):
+
         """Generates embeddings for given images.
 
         Args:
@@ -512,6 +279,7 @@ class FaceNet:
         return emb_array
 
     def _generate_batch_embeddings(self, batch):
+
         """One run over a batch, that generates embeddings for given batch.
 
         Args:
@@ -525,6 +293,7 @@ class FaceNet:
         return self.sess_.run(self.embeddings_tensor_, feed_dict=feed_dict)
 
     def _load_data_from_paths(self, image_paths):
+
         """Loads images in RGB, and returns preprocessed images.
 
         Args:
@@ -549,6 +318,7 @@ class FaceNet:
         return images
 
     def _preprocess_images(self, images):
+
         """Preprocesses array of images.
 
         Note: Pass aligned faces of size (182, 182) to this method
@@ -572,6 +342,7 @@ class FaceNet:
         return imgs
 
     def _preprocess_image(self, image):
+
         """Preprocess image for feeding to model.
 
         Note: Pass aligned face of size (182, 182) to this method if self.image_size is (160, 160)
@@ -592,6 +363,7 @@ class FaceNet:
 
     @staticmethod
     def _prewhiten(x):
+
         """Input image standardization.
 
         This makes predictions much accurate than using non-whitened images.
@@ -603,14 +375,16 @@ class FaceNet:
             whitened image
         """
 
-        mean = np.mean(x)
-        std = np.std(x)
-        std_adj = np.maximum(std, 1.0 / np.sqrt(x.size))
-        y = np.multiply(np.subtract(x, mean), 1 / std_adj)
+        # mean = np.mean(x)
+        # std = np.std(x)
+        # std_adj = np.maximum(std, 1.0 / np.sqrt(x.size))
+        # y = np.multiply(np.subtract(x, mean), 1 / std_adj)
+        y = (x - 127.5) / 128
         return y
 
     @staticmethod
     def _crop(image, image_size):
+
         """Crops given image and returns central (image_size, image_size) region."""
 
         if image.shape[1] > image_size:
@@ -623,6 +397,7 @@ class FaceNet:
 
 
 class FaceDetector:
+
     """A class for detecting faces in images or frames.
 
     Give image to 'detect_faces' method, and it will return all faces as an array.
@@ -631,11 +406,14 @@ class FaceDetector:
         detect_faces: detects faces in given image.
 
     Attributes:
-        detector_: dlib's HOG-based frontal face detector.
+        detector_: dlib's HOG-based frontal face detector, if cnn_path is None. else the given model will be used.
     """
 
-    def __init__(self):
-        self.detector_ = dlib.get_frontal_face_detector()
+    def __init__(self, cnn_path=None):
+        if cnn_path is None:
+            self.detector_ = dlib.get_frontal_face_detector()
+        else:
+            self.detector_ = dlib.cnn_face_detection_model_v1(cnn_path)
 
     def detect_faces(self, image):
         """Detects faces in given image.
@@ -648,8 +426,9 @@ class FaceDetector:
         """
 
         # resized_image = self._resize_image(image, out_pixels_wide=800)
-        gray = (skcolor.rgb2gray(image) * 255).astype(np.uint8)
-        rects = self.detector_(gray, 0)  # Detect faces in the gray scale frame
+        # gray = (skcolor.rgb2gray(image) * 255).astype(np.uint8)
+
+        rects = self.detector_(image, 0)
         return rects
 
     @staticmethod
@@ -661,6 +440,7 @@ class FaceDetector:
 
 
 class FaceAligner:
+
     """Aligns faces, use aligned faces for generating embeddings via FaceNet.
 
     Public methods:
@@ -677,14 +457,13 @@ class FaceAligner:
     """
 
     def __init__(self,
-                 predictor_name='shape_predictor_5_face_landmarks.dat',
+                 predictor_path,
                  desired_left_eye=(0.35, 0.35),
                  desired_face_width=182):
         """Init a FaceAligner instance.
 
         Args:
-            predictor_name: name of dlib's facial shape predictor (5 landmarks) located in\
-             models/shape_predictor/
+            predictor_path: path to dlib's facial shape predictor (5 landmarks)
             desired_left_eye: Desired output left eye position, given in a (x, y) tuple.
                 Percentages between (0.2, 0.4), With 20% you’ll basically be getting a
                 “zoomed in” view of the face, whereas with larger values the face will
@@ -692,9 +471,9 @@ class FaceAligner:
             desired_face_width: Output images width, in pixels.
         """
 
-        predictor_dir = os.path.join(os.path.dirname(__file__) + '/models/shape_predictor/',
-                                     predictor_name)
-        self.predictor_ = dlib.shape_predictor(predictor_dir)
+        # predictor_dir = os.path.join(os.path.dirname(__file__) + '/models/shape_predictor/',
+        #                              predictor_path)
+        self.predictor_ = dlib.shape_predictor(predictor_path)
         FACIAL_LANDMARKS_5_IDXS = OrderedDict([
             ("right_eye", (2, 3)),
             ("left_eye", (0, 1)),
@@ -720,7 +499,7 @@ class FaceAligner:
         gray = skcolor.rgb2gray(image).astype(np.uint8)
         outputs = list()
         for rect in rects:
-            shape = self.predictor_(gray, rect)
+            shape = self.predictor_(gray, rect.rect)
             predicted_coords = self._shape_to_np(shape)
 
             tform_mat = self._calc_transform_mat(predicted_coords)

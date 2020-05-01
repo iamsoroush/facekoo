@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+"""Helper functions.
+"""
+# Author: Soroush Moazed <soroush.moazed@gmail.com>
+
 import numpy as np
 import cv2
 import os
@@ -5,6 +10,7 @@ from sklearn import metrics
 
 
 def clustering_evaluation(data, labels, model, n_iterations=50):
+
     """I will use v_measure from sklearn for evaluating. It is same as pair-wise precision and recall.\
 
     homogeneity (h) : each cluster contains only members of a single class.\
@@ -106,6 +112,7 @@ def one_to_many_high_correlated_indices(new_flatten_gray_images, saved_gray_imag
 
 
 def draw_border(img, pt1, pt2, color, thickness, r, d, label='Unknown'):
+
     """Fancy box drawing function for detected faces."""
 
     x1, y1 = pt1
