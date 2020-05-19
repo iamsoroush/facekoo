@@ -8,7 +8,7 @@ Here is the overall pipeline:
 
 # Results
 
-Let's find all individual persons(faces) who appears in the following video:
+Let's find all individual persons(faces) who appear in the following video:
 
 [![Samplr video](http://img.youtube.com/vi/y3d9mBBApQA/0.jpg)](http://www.youtube.com/watch?v=y3d9mBBApQA)
 
